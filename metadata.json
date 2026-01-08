@@ -1,0 +1,5 @@
+{
+  "name": "MathOlympiad AI Grader",
+  "description": "An intelligent grading and analysis platform for Primary School Math Olympiad. Features student management, AI-assisted paper cutting, auto-grading, and comprehensive performance analytics.",
+  "requestFramePermissions": []
+}
