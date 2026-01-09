@@ -410,7 +410,8 @@ const StandardAnalysis = () => {
                 <div className="p-12 text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
                     <p className="text-slate-600">正在调用百度教育OCR进行智能切题...</p>
-                    <p className="text-xs text-slate-400 mt-2">请确保浏览器已开启CORS支持</p>
+                    <p className="text-xs text-slate-400 mt-2">通过代理 /api/baidu 调用API，请稍候...</p>
+                    <p className="text-xs text-slate-400 mt-1">如遇问题，请打开浏览器控制台（F12）查看详细错误</p>
                 </div>
             )}
 

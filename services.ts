@@ -9,14 +9,31 @@ const KEYS = {
 };
 
 // --- Baidu AI Configuration ---
+// ⚠️ 安全警告：前端环境变量仍然会暴露在bundle中
+// 最佳实践：应该通过后端API代理所有百度API调用
+// 临时方案：使用环境变量（仍然不够安全，但比硬编码好）
 const BAIDU_CONFIG = {
-  AK: 'oGn4dwr6vXpYB8yjwODZwu2C',
-  SK: 'Rouz1Og5QFhlXFGR0BmD8ZYTCzulwDE2',
-  // Note: Direct calls from browser will fail due to CORS unless a proxy is used or browser security is disabled.
-  // Using a CORS proxy for demonstration purposes if needed, or assume local env is configured.
-  // URL_PREFIX: 'https://cors-anywhere.herokuapp.com/', 
-  URL_PREFIX: '', // Assume browser has CORS plugin enabled for testing
+  AK: import.meta.env.VITE_BAIDU_AK || '',
+  SK: import.meta.env.VITE_BAIDU_SK || '',
+  // 使用Nginx代理解决跨域问题
+  // 在生产环境（Docker）中，使用 /api/baidu 代理路径
+  // 在开发环境中，如果Vite配置了代理，也可以使用相对路径
+  URL_PREFIX: '/api/baidu',
 };
+
+// 验证配置
+if (!BAIDU_CONFIG.AK || !BAIDU_CONFIG.SK) {
+  console.error('⚠️ 警告: 百度API密钥未配置！');
+  console.error('请在项目根目录创建 .env 文件，并添加以下内容：');
+  console.error('VITE_BAIDU_AK=your_baidu_api_key');
+  console.error('VITE_BAIDU_SK=your_baidu_secret_key');
+  console.error('');
+  console.error('调试信息：');
+  console.error('  import.meta.env.VITE_BAIDU_AK:', import.meta.env.VITE_BAIDU_AK);
+  console.error('  import.meta.env.VITE_BAIDU_SK:', import.meta.env.VITE_BAIDU_SK ? '***已设置***' : '未设置');
+  console.error('  当前模式:', import.meta.env.MODE);
+  console.error('  是否生产环境:', import.meta.env.PROD);
+}
 
 // --- Storage Service ---
 
@@ -126,21 +143,54 @@ let tokenExpiresAt = 0;
 const getAccessToken = async () => {
     if (accessToken && Date.now() < tokenExpiresAt) return accessToken;
 
-    const url = `${BAIDU_CONFIG.URL_PREFIX}https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_CONFIG.AK}&client_secret=${BAIDU_CONFIG.SK}`;
+    // 验证配置
+    if (!BAIDU_CONFIG.AK || !BAIDU_CONFIG.SK) {
+        throw new Error('百度API密钥未配置！请设置 VITE_BAIDU_AK 和 VITE_BAIDU_SK 环境变量');
+    }
+
+    // 使用代理路径，Nginx会转发到百度API
+    // 注意：百度API要求使用URL参数方式（虽然不够安全，但API限制）
+    // 敏感信息已通过Nginx配置不在访问日志中记录
+    const url = `${BAIDU_CONFIG.URL_PREFIX}/oauth/2.0/token?grant_type=client_credentials&client_id=${encodeURIComponent(BAIDU_CONFIG.AK)}&client_secret=${encodeURIComponent(BAIDU_CONFIG.SK)}`;
     
     try {
-        const response = await fetch(url, { method: 'POST' });
+        console.log('正在获取百度API Token...');
+        const response = await fetch(url, { 
+            method: 'POST'
+        });
+        
+        // 检查响应状态
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("Token API Error:", response.status, errorText);
+            throw new Error(`获取Token失败: ${response.status} ${response.statusText}`);
+        }
+        
         const data = await response.json();
+        
+        // 检查API返回的错误
+        if (data.error) {
+            console.error("Token API Error Response:", data);
+            throw new Error(`百度API错误: ${data.error_description || data.error}`);
+        }
+        
         if (data.access_token) {
             accessToken = data.access_token;
             tokenExpiresAt = Date.now() + (data.expires_in * 1000) - 60000;
             return accessToken;
         } else {
-            throw new Error('Failed to get access token');
+            throw new Error('API未返回access_token');
         }
-    } catch (error) {
-        console.error("Token Error. Ensure CORS is enabled in browser:", error);
-        throw error;
+    } catch (error: any) {
+        console.error("Token Error:", error);
+        // 提供更详细的错误信息
+        if (error.message) {
+            throw error;
+        } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+            throw new Error('网络请求失败，请检查代理配置或网络连接');
+        } else {
+            throw new Error(`获取Token失败: ${error.message || '未知错误'}`);
+        }
     }
 };
 
@@ -163,8 +213,11 @@ export const aiService = {
              // Remove header for API
              const imageBody = base64Img.replace(/^data:image\/\w+;base64,/, "");
              
-             // 1. Call paper_cut_edu
-             const response = await fetch(`${BAIDU_CONFIG.URL_PREFIX}https://aip.baidubce.com/rest/2.0/ocr/v1/paper_cut_edu`, {
+             // 1. Call paper_cut_edu - 使用代理路径
+             const apiUrl = `${BAIDU_CONFIG.URL_PREFIX}/rest/2.0/ocr/v1/paper_cut_edu`;
+             console.log('调用API:', apiUrl);
+             
+             const response = await fetch(apiUrl, {
                  method: 'POST',
                  headers: {
                      'Content-Type': 'application/x-www-form-urlencoded'
@@ -172,9 +225,22 @@ export const aiService = {
                  body: `access_token=${token}&image=${encodeURIComponent(imageBody)}`
              });
              
+             // 检查响应状态
+             if (!response.ok) {
+                 const errorText = await response.text();
+                 console.error("OCR API Error:", response.status, response.statusText, errorText);
+                 throw new Error(`OCR API调用失败: ${response.status} ${response.statusText}`);
+             }
+             
              const data = await response.json();
              
-             if (data.results) {
+             // 检查API返回的错误
+             if (data.error_code) {
+                 console.error("OCR API Error Response:", data);
+                 throw new Error(`百度OCR错误: ${data.error_msg || `错误代码 ${data.error_code}`}`);
+             }
+             
+             if (data.results && Array.isArray(data.results)) {
                  for (const item of data.results) {
                      // item.location: {left, top, width, height}
                      // Crop the question image
@@ -193,6 +259,8 @@ export const aiService = {
                      });
                      questionIndexCounter++;
                  }
+             } else {
+                 console.warn("API返回数据格式异常:", data);
              }
         }
 
@@ -213,9 +281,10 @@ export const aiService = {
 
         return questions;
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Analysis Error:", error);
-        alert("调用百度API失败，请检查浏览器控制台。如果是跨域错误(CORS)，请安装CORS插件或使用无安全模式启动浏览器。");
+        const errorMessage = error?.message || '未知错误';
+        alert(`调用百度API失败: ${errorMessage}\n\n请检查：\n1. 网络连接是否正常\n2. 代理配置是否正确（/api/baidu）\n3. 浏览器控制台查看详细错误信息`);
         return [];
     }
   },
@@ -237,8 +306,11 @@ export const aiService = {
 
         const imageBody = studentPaperBase64.replace(/^data:image\/\w+;base64,/, "");
 
-        // Call Handwriting OCR
-        const response = await fetch(`${BAIDU_CONFIG.URL_PREFIX}https://aip.baidubce.com/rest/2.0/ocr/v1/handwriting`, {
+        // Call Handwriting OCR - 使用代理路径
+        const apiUrl = `${BAIDU_CONFIG.URL_PREFIX}/rest/2.0/ocr/v1/handwriting`;
+        console.log('调用手写识别API:', apiUrl);
+        
+        const response = await fetch(apiUrl, {
              method: 'POST',
              headers: {
                  'Content-Type': 'application/x-www-form-urlencoded'
@@ -246,7 +318,21 @@ export const aiService = {
              body: `access_token=${token}&image=${encodeURIComponent(imageBody)}`
         });
 
+        // 检查响应状态
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("Handwriting OCR API Error:", response.status, response.statusText, errorText);
+            throw new Error(`手写识别API调用失败: ${response.status} ${response.statusText}`);
+        }
+
         const data = await response.json();
+        
+        // 检查API返回的错误
+        if (data.error_code) {
+            console.error("Handwriting OCR API Error Response:", data);
+            throw new Error(`百度手写识别错误: ${data.error_msg || `错误代码 ${data.error_code}`}`);
+        }
+        
         const allText = data.words_result ? data.words_result.map((w: any) => w.words).join(' ') : "";
         console.log("Student OCR Text:", allText);
 
@@ -276,8 +362,11 @@ export const aiService = {
           totalScore
         };
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Grading Error:", error);
+        const errorMessage = error?.message || '未知错误';
+        console.error("阅卷失败:", errorMessage);
+        // 返回原始提交，标记为已评分但分数为0
         return { ...submission, status: 'graded', totalScore: 0, results: [] };
     }
   },
